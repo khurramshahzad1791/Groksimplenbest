@@ -81,15 +81,18 @@ def calculate_indicators(df):
 
     # MACD
     macd = ta.macd(df['close'], fast=12, slow=26, signal=9)
-    df = df.join(macd)
+    if macd is not None:
+        df = df.join(macd)
 
     # Bollinger Bands
     bbands = ta.bbands(df['close'], length=20, std=2)
-    df = df.join(bbands)
+    if bbands is not None:
+        df = df.join(bbands)
 
     # Stochastic
     stoch = ta.stoch(df['high'], df['low'], df['close'], k=14, d=3)
-    df = df.join(stoch)
+    if stoch is not None:
+        df = df.join(stoch)
 
     # Volume SMA
     df['Volume_SMA'] = ta.sma(df['volume'], length=20)
@@ -99,6 +102,14 @@ def calculate_indicators(df):
 
     df.dropna(inplace=True)
     return df
+
+# ------------------------------
+# Helper to find dynamic column names
+# ------------------------------
+def find_columns(df, prefix):
+    """Return the first column that starts with the given prefix."""
+    cols = [col for col in df.columns if col.startswith(prefix)]
+    return cols[0] if cols else None
 
 # ------------------------------
 # Grade and probability based on strength
@@ -141,6 +152,14 @@ def generate_signal(df):
     latest = df.iloc[-1]
     prev = df.iloc[-2] if len(df) > 1 else None
 
+    # Dynamically find column names
+    macd_col = find_columns(df, 'MACD_')
+    macd_signal_col = find_columns(df, 'MACDs_')
+    stoch_k_col = find_columns(df, 'STOCHk_')
+    stoch_d_col = find_columns(df, 'STOCHd_')
+    bb_lower = find_columns(df, 'BBL_')
+    bb_upper = find_columns(df, 'BBU_')
+
     signals = []
     strength = 0
 
@@ -161,33 +180,31 @@ def generate_signal(df):
         strength -= 1
 
     # MACD
-    macd_col = 'MACD_12_26_9'
-    signal_col = 'MACDs_12_26_9'
-    hist_col = 'MACDh_12_26_9'
-    if latest[macd_col] > latest[signal_col] and (prev is None or prev[macd_col] <= prev[signal_col]):
-        signals.append("MACD bullish cross")
-        strength += 2
-    elif latest[macd_col] < latest[signal_col] and (prev is None or prev[macd_col] >= prev[signal_col]):
-        signals.append("MACD bearish cross")
-        strength -= 2
+    if macd_col and macd_signal_col:
+        if latest[macd_col] > latest[macd_signal_col] and (prev is None or prev[macd_col] <= prev[macd_signal_col]):
+            signals.append("MACD bullish cross")
+            strength += 2
+        elif latest[macd_col] < latest[macd_signal_col] and (prev is None or prev[macd_col] >= prev[macd_signal_col]):
+            signals.append("MACD bearish cross")
+            strength -= 2
 
     # Bollinger Bands
-    if latest['close'] < latest['BBL_20_2.0']:
-        signals.append("Below lower Bollinger")
-        strength += 2
-    elif latest['close'] > latest['BBU_20_2.0']:
-        signals.append("Above upper Bollinger")
-        strength -= 1
+    if bb_lower and bb_upper:
+        if latest['close'] < latest[bb_lower]:
+            signals.append("Below lower Bollinger")
+            strength += 2
+        elif latest['close'] > latest[bb_upper]:
+            signals.append("Above upper Bollinger")
+            strength -= 1
 
     # Stochastic
-    stoch_k = 'STOCHk_14_3_3'
-    stoch_d = 'STOCHd_14_3_3'
-    if latest[stoch_k] < 20 and latest[stoch_k] > latest[stoch_d]:
-        signals.append("Stochastic oversold & rising")
-        strength += 1
-    elif latest[stoch_k] > 80 and latest[stoch_k] < latest[stoch_d]:
-        signals.append("Stochastic overbought & falling")
-        strength -= 1
+    if stoch_k_col and stoch_d_col:
+        if latest[stoch_k_col] < 20 and latest[stoch_k_col] > latest[stoch_d_col]:
+            signals.append("Stochastic oversold & rising")
+            strength += 1
+        elif latest[stoch_k_col] > 80 and latest[stoch_k_col] < latest[stoch_d_col]:
+            signals.append("Stochastic overbought & falling")
+            strength -= 1
 
     # Volume spike
     if latest['volume'] > 1.5 * latest['Volume_SMA']:
@@ -290,6 +307,11 @@ def plot_symbol(_exchange, symbol, timeframe='15m'):
     if df.empty:
         return None
 
+    # Find dynamic column names
+    macd_col = find_columns(df, 'MACD_')
+    macd_signal_col = find_columns(df, 'MACDs_')
+    macd_hist_col = find_columns(df, 'MACDh_')
+
     fig = make_subplots(rows=4, cols=1, shared_xaxes=True,
                         vertical_spacing=0.03, row_heights=[0.5, 0.2, 0.15, 0.15])
 
@@ -315,10 +337,11 @@ def plot_symbol(_exchange, symbol, timeframe='15m'):
     fig.add_hline(y=30, line_dash="dash", line_color="green", row=3, col=1)
 
     # MACD
-    fig.add_trace(go.Scatter(x=df.index, y=df['MACD_12_26_9'], line=dict(color='blue'), name='MACD'), row=4, col=1)
-    fig.add_trace(go.Scatter(x=df.index, y=df['MACDs_12_26_9'], line=dict(color='red'), name='Signal'), row=4, col=1)
-    colors_macd = ['green' if val >= 0 else 'red' for val in df['MACDh_12_26_9']]
-    fig.add_trace(go.Bar(x=df.index, y=df['MACDh_12_26_9'], name='Histogram', marker_color=colors_macd), row=4, col=1)
+    if macd_col and macd_signal_col and macd_hist_col:
+        fig.add_trace(go.Scatter(x=df.index, y=df[macd_col], line=dict(color='blue'), name='MACD'), row=4, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df[macd_signal_col], line=dict(color='red'), name='Signal'), row=4, col=1)
+        colors_macd = ['green' if val >= 0 else 'red' for val in df[macd_hist_col]]
+        fig.add_trace(go.Bar(x=df.index, y=df[macd_hist_col], name='Histogram', marker_color=colors_macd), row=4, col=1)
 
     fig.update_layout(title=f'{symbol} - {timeframe} chart', xaxis_rangeslider_visible=False, height=800)
     return fig
@@ -382,7 +405,7 @@ if run_scan:
             return f'background-color: {color}; color: white'
 
         styled = filtered.style.applymap(color_signal, subset=['Signal'])
-        st.dataframe(styled, use_container_width=True, height=600)
+        st.dataframe(styled, width='stretch', height=600)  # updated
 
         csv = filtered.to_csv(index=False).encode('utf-8')
         st.download_button("Download results as CSV", csv, "scan_results.csv", "text/csv")
